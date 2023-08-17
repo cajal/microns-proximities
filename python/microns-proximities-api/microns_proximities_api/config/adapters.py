@@ -1,0 +1,2 @@
+minnie_proximities = {}
+

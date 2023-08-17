@@ -1,0 +1,3 @@
+datajoint-plus
+microns-utils
+torch>1.0
