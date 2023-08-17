@@ -1,0 +1,26 @@
+version: '3.4'
+x-build: &build
+  context: ../
+  dockerfile: Dockerfile
+  
+x-shared: &common
+  ipc: host
+  build:
+    context: ../
+    dockerfile: Dockerfile
+  volumes:
+    - ../:/src/microns-proximities
+    - /mnt:/mnt
+  env_file:
+    - .env
+  container_name: "microns-proximities"
+
+services:
+  notebook:
+    <<: *common
+    ports:
+        - "${JUPYTER_HOST:-0.0.0.0}:${JUPYTER_PORT_CONTAINER:-8888}:8888"
+    entrypoint: /src/microns-proximities/deploy/notebook.sh
+  bin:
+    <<: *common
+    entrypoint: /bin/bash
