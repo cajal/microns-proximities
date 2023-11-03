@@ -1,10 +1,12 @@
 """
 DataJoint tables for proximities.
 """
+from pathlib import Path
 import datajoint as dj
 import datajoint_plus as djp
 
 import microns_utils.datajoint_utils as dju
+from microns_utils.misc_utils import classproperty
 
 from microns_manual_proofreading_api.schemas import minnie65_manual_proofreading as m65manprf
 from microns_materialization_api.schemas import minnie65_materialization as m65mat
@@ -345,7 +347,7 @@ class ProximityKeySource(djp.Lookup):
 
 
 @schema
-class Proximity(djp.Lookup):
+class Proximity2(djp.Lookup):
     enable_hashing = True
     hash_name = 'prx_id'
     hashed_attrs = ProximityMethod.hash_name, 'skeleton_prc_id_axon', 'skeleton_prc_id_dend'
@@ -357,12 +359,55 @@ class Proximity(djp.Lookup):
     ---
     axon_len :                  float                                               # the skeletal length of the axon in the proximity
     dend_len :                  float                                               # the skeletal length of the dendrite in the proximity
-    data :                      <minnie65_proximity_results>                        # data products computed during proximity
-    compute_time :              float # time to compute (seconds)
+    data :                      <minnie65_proximities>                        # data products computed during proximity
+    prx_chunk_hash : varchar(6) # hash of proximity chunk from ProximityMaker
     """
+    @classproperty
+    def base_path(cls):
+        return Path(config.externals['minnie65_proximities']['location'])
 
     @classmethod
+    def make_filepath(cls, proximity_method, skeleton_prc_id_axon, skeleton_prc_id_dend, prx_id, suffix='.npz', **kwargs):
+        return cls.base_path.joinpath(f'{proximity_method}_{skeleton_prc_id_axon}_{skeleton_prc_id_dend}_{prx_id}_proximity').with_suffix(suffix)
+    
+    @classmethod
     def restrict_with(cls, axon_source, dend_source, axon_key=None, dend_key=None, skeleton_prc_set='4c396d17', proximity_method='0ab4bc'):
+        """
+        Restrict the Proximity table with additional filtering criteria.
+
+        Parameters:
+        ----------
+        axon_source : str
+            Source of the axon data, can be either 'manual' or 'auto'. If 'manual', it relates with
+            the `SkeletonProcessed.MeshworkAxonDendrite`, and if 'auto', it relates with 
+            `SkeletonProcessed.AutoProofreadNeuron`.
+
+        dend_source : str
+            Source of the dendrite data, similar to `axon_source`.
+
+        axon_key : dict, optional
+            Filtering relation for axon data. Defaults to an empty dictionary if None.
+
+        dend_key : dict, optional
+            Filtering relation for dendrite data. Defaults to an empty dictionary if None.
+
+        skeleton_prc_set : str, optional
+            Hash for the skeleton processed set relation `SkeletonProcessedSet.r1pwh()`. 
+            Defaults to '4c396d17'.
+
+        proximity_method : str, optional
+            Proximity method hash. Defaults to '0ab4bc'.
+
+        Returns:
+        -------
+        DataJoint relation
+            Restricted relation based on provided criteria and sources for axon and dendrite data.
+
+        Raises:
+        ------
+        AttributeError
+            If the axon or dendrite source is neither 'manual' nor 'auto'.
+        """
         def resolve_source(source):
             if source == 'manual':
                 source_rel = SkeletonProcessed.MeshworkAxonDendrite
@@ -389,6 +434,22 @@ class Proximity(djp.Lookup):
 
         return prx_rel * axon_rel * dend_rel
 
+    @classmethod
+    def make_filepaths_from_rel(cls, rel):
+        """
+        Make filepaths from a DataJoint relation. Relation must contain the 'data' attribute containing the filepath hash.
+        """
+        fns = (rel.proj(hash='data') * schema.external['minnie65_proximities']).fetch('filepath')
+        fps = []
+        for fn in fns:
+            fps.append(cls.base_path.joinpath(fn))
+        return fps
+
+
+class Proximity(Proximity2):
+    def __new__(cls):
+        return Proximity2()
+
 
 @schema
 class ProximityMaker(djp.Lookup):
@@ -405,6 +466,9 @@ class ProximityMaker(djp.Lookup):
         -> master
         -> ProximityKeySource.SkeletonProcessedSetChunk
         ---
-        duration :         float     # total time to finish chunk (seconds)
+        load_time : float       # time to load data (seconds)
+        compute_time : float    # time to compute (seconds)
+        save_time : float       # time to save data (seconds)
+        total_time : float      # total time (seconds)
         ts_inserted=CURRENT_TIMESTAMP : timestamp
         """
