@@ -1,4 +1,4 @@
-FROM at-docker:5000/microns-base:cuda11.4.0-python3.8
+FROM at-docker:5000/microns-base:cuda11.8.0-python3.8
 
 LABEL mantainer="Stelios Papadopoulos <spapadop@bcm.edu>"
 
@@ -14,5 +14,5 @@ RUN echo "{\"token\": \"${CLOUDVOLUME_TOKEN:-}\"}" > .cloudvolume/secrets/cave-s
 
 # CURRENT PACKAGE
 COPY . /src/microns-proximities
-RUN python -m pip install --no-cache-dir /src/microns-proximities/python/microns-proximities
-RUN python -m pip install --no-cache-dir /src/microns-proximities/python/microns-proximities-api
+RUN python -m pip install -e /src/microns-proximities/python/microns-proximities
+RUN python -m pip install -e /src/microns-proximities/python/microns-proximities-api
