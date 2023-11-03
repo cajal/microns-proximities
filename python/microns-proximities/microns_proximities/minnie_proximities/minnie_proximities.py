@@ -606,13 +606,11 @@ class ProximityKeySource(mp.ProximityKeySource):
 
 
 class Proximity(mp.Proximity):
-    @classproperty
-    def base_path(cls):
-        return Path(mp.config.externals['minnie65_proximity_results']['location'])
+    pass
 
-    @classmethod
-    def make_filepath(cls, proximity_method, skeleton_prc_id_axon, skeleton_prc_id_dend, prx_id, suffix='.npz', **kwargs):
-        return cls.base_path.joinpath(f'{proximity_method}_{skeleton_prc_id_axon}_{skeleton_prc_id_dend}_{prx_id}_proximity').with_suffix(suffix)
+
+class Proximity2(mp.Proximity2):
+    pass
     
 
 class ProximityMaker(mp.ProximityMaker):
@@ -620,10 +618,12 @@ class ProximityMaker(mp.ProximityMaker):
     class SkeletonProcessedSetChunk(mp.ProximityMaker.SkeletonProcessedSetChunk):
         @classproperty
         def key_source(cls):
-            return ProximityKeySource.SkeletonProcessedSetChunk & ['axon_chunk_id=0', 'dend_chunk_id=0'] # only chunks that contain the manually proofread skeletons
+            return ProximityKeySource.SkeletonProcessedSetChunk & {'prx_key_src': '15be8db2'} #& ['axon_chunk_id=0', 'dend_chunk_id=0', 'axon_chunk_id=1', 'dend_chunk_id=1'] # only chunks that contain the manually proofread skeletons
     
         def make(self, key):
-            t0 = time.time()
+            start_ts = time.time()
+            key['prx_chunk_hash'] = self.hash1(key)
+            
             logger.info('--> LOAD SKELETONS')
             logger.info('Getting skeleton chunks...')
             axon_chunk_key = {
@@ -653,7 +653,10 @@ class ProximityMaker(mp.ProximityMaker):
             axons = {k: np.load(v) for k, v in axon_fps.items()}
             dends = {k: np.load(v) for k, v in dend_fps.items()}
             logger.info('Skeletons loaded.')
-    
+            load_ts = time.time()
+            load_time = np.round(load_ts - start_ts, decimals=3)
+            logger.info(f'Skeleton loading time: {load_time} seconds.')
+
             logger.info('--> COMPUTE PROXIMITIES')
             skeleton_pairs = list(product(axon_fps.keys(), dend_fps.keys()))
     
@@ -665,7 +668,6 @@ class ProximityMaker(mp.ProximityMaker):
             # iterate
             results = []
             for sk_pair in tqdm(skeleton_pairs):
-                tc0 = time.time()
                 axon_id, dend_id = sk_pair
                 axon_verts = axons[axon_id]['vertices']
                 axon_edges = axons[axon_id]['edges']
@@ -687,25 +689,34 @@ class ProximityMaker(mp.ProximityMaker):
                     result['proximity_method'] = proximity_method
                     result['skeleton_prc_id_axon'] = axon_id
                     result['skeleton_prc_id_dend'] = dend_id
-                    result['prx_id'] = Proximity.hash1(result)
+                    result['prx_id'] = Proximity2.hash1(result)
                     data['edges1_prx'] = sku.filter_edges(axon_edges, vertices_inds_subset=np.unique(data['verts1_inds_prx']))
                     data['edges2_prx'] = sku.filter_edges(dend_edges, vertices_inds_subset=np.unique(data['verts2_inds_prx']))
                     result['axon_len'] = sku.compute_skeletal_length(axon_verts, data['edges1_prx'])
                     result['dend_len'] = sku.compute_skeletal_length(dend_verts, data['edges2_prx'])
                     result['data'] = data
-                    result['compute_time'] = np.round(time.time() - tc0, decimals=3)
+                    result['prx_chunk_hash'] = key['prx_chunk_hash']
                     results.append(result)
             logger.info('Compute proximities completed.')
-            
+            compute_ts = time.time()
+            compute_time = np.round(compute_ts - load_ts, decimals=3)
+            logger.info(f'Total compute time: {compute_time} seconds.')
+
             logger.info('--> SAVE FILEPATHS')
             for result in results:
-                fp = Proximity.make_filepath(**result)
-                np.savez(fp, **result['data'])
+                fp = Proximity2.make_filepath(**result)
+                np.savez_compressed(fp, **result['data'])
                 result['data'] = fp
             logger.info('Save completed.')
-            
+            save_time = np.round(time.time() - compute_ts, decimals=3)
+            logger.info(f'Total save time: {save_time} seconds.')
+
             logger.info('--> INSERT TO DATAJOINT')
-            Proximity.insert(results, ignore_extra_fields=True, skip_hashing=True)
-            key['duration'] = np.round(time.time() - t0, decimals=3)
-            self.insert(key, insert_to_master=True)
+            
+            key['load_time'] = load_time
+            key['compute_time'] = compute_time
+            key['save_time'] = save_time
+            key['total_time'] = np.round(time.time() - start_ts, decimals=3)
+            Proximity2.insert(results, ignore_extra_fields=True, skip_hashing=True, skip_duplicates=True)
+            self.insert1(key, insert_to_master=True, skip_hashing=True)
             logger.info('Insert completed.')
