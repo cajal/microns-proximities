@@ -604,6 +604,16 @@ class ProximityKeySource(mp.ProximityKeySource):
 
             cls.insert(rows, insert_to_master=True)
 
+    class SkeletonProcessedSetChunkDone(mp.ProximityKeySource.SkeletonProcessedSetChunkDone):
+        @classmethod
+        def fill(cls, key):
+            len_total = len(cls.master.SkeletonProcessedSetChunk & key)
+            len_complete = len(ProximityMaker.SkeletonProcessedSetChunk & key)
+            if len_total == len_complete:
+                key['n_total'] = len_total
+                key['n_complete'] = len_complete
+                cls.insert1(key)
+
 
 class Proximity(mp.Proximity):
     pass
