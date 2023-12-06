@@ -345,6 +345,16 @@ class ProximityKeySource(djp.Lookup):
         dend_chunk_id : int # 
         """
 
+    class SkeletonProcessedSetChunkDone(djp.Part):
+        hash_name = 'prx_key_src'
+        definition = """
+        -> master
+        ---
+        n_total : int # total number of chunks
+        n_complete : int # number of completed chunks
+        ts_inserted=CURRENT_TIMESTAMP : timestamp
+        """
+
 
 @schema
 class Proximity2(djp.Lookup):
