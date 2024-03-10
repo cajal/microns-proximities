@@ -6,6 +6,7 @@ import datajoint as dj
 import datajoint_plus as djp
 from itertools import product
 from tqdm import tqdm 
+import traceback
 
 from microns_proximities_api.schemas import \
     minnie_proximities as mp
@@ -262,9 +263,9 @@ class SkeletonSet(mp.SkeletonSet):
 
     class Proximity(mp.SkeletonSet.Proximity):
         @classmethod
-        def fill(cls):
+        def fill(cls, manual_nucleus_set):
             # manually proofread neurons from PCG Meshwork Skeletons
-            proof_nucs = NucleusSet.r1pwh('4df699')
+            proof_nucs = NucleusSet.r1pwh(manual_nucleus_set)
             proof_rel = Skeleton.MeshworkAxonDendrite() * proof_nucs
             proof_rel = (dj.U('ts_inserted') * proof_rel).proj() & dj.U('segment_id', 'nucleus_id').aggr(proof_rel, ts_inserted='max(ts_inserted)') # gets latest skeleton for a given segment, nucleus_id
             proof_rel = proof_rel.proj(source="'manual'")
@@ -453,9 +454,9 @@ class SkeletonProcessedSet(mp.SkeletonProcessedSet):
 
     class Proximity(mp.SkeletonProcessedSet.Proximity):
         @classmethod
-        def fill(cls):
+        def fill(cls, manual_nucleus_set):
             # manually proofread neurons from PCG Meshwork Skeletons
-            proof_nucs = mp.NucleusSet.r1pwh('4df699')
+            proof_nucs = mp.NucleusSet.r1pwh(manual_nucleus_set)
             proof_rel = mp.SkeletonProcessed.MeshworkAxonDendrite() * proof_nucs
             proof_rel = (dj.U('ts_inserted') * proof_rel).proj() & dj.U('segment_id', 'nucleus_id').aggr(proof_rel, ts_inserted='max(ts_inserted)') # gets latest skeleton for a given segment, nucleus_id
             proof_rel = proof_rel.proj(source="'manual'")
@@ -615,20 +616,16 @@ class ProximityKeySource(mp.ProximityKeySource):
                 cls.insert1(key)
 
 
-class Proximity(mp.Proximity):
-    pass
-
-
 class Proximity2(mp.Proximity2):
     pass
-    
+
 
 class ProximityMaker(mp.ProximityMaker):
         
     class SkeletonProcessedSetChunk(mp.ProximityMaker.SkeletonProcessedSetChunk):
         @classproperty
         def key_source(cls):
-            return ProximityKeySource.SkeletonProcessedSetChunk & {'prx_key_src': '15be8db2'} #& ['axon_chunk_id=0', 'dend_chunk_id=0', 'axon_chunk_id=1', 'dend_chunk_id=1'] # only chunks that contain the manually proofread skeletons
+            return ProximityKeySource.SkeletonProcessedSetChunk & {'prx_key_src': '9d36ae93'} #& ['axon_chunk_id=0', 'dend_chunk_id=0', 'axon_chunk_id=1', 'dend_chunk_id=1'] # only chunks that contain the manually proofread skeletons
     
         def make(self, key):
             start_ts = time.time()
@@ -730,3 +727,83 @@ class ProximityMaker(mp.ProximityMaker):
             Proximity2.insert(results, ignore_extra_fields=True, skip_hashing=True, skip_duplicates=True)
             self.insert1(key, insert_to_master=True, skip_hashing=True)
             logger.info('Insert completed.')
+
+
+class ProximitySynapseMethod(mp.ProximitySynapseMethod):
+    @classmethod
+    def run(cls, key):
+        return cls.r1p(key).run(**key)
+    
+    class WithinDistance(mp.ProximitySynapseMethod.WithinDistance):
+        @classmethod
+        def update_method(cls, max_distance):
+            key = dict(
+                max_distance=max_distance
+            )
+            key[Tag.attr_name]= Tag.version
+            cls.insert1(key, insert_to_master=True)
+
+        def run(self, prx_data, syn_xyz_nm, max_distance=None, force=False, **kwargs):
+            if not force:
+                params = (self & kwargs).fetch1()
+                assert params.get(Tag.attr_name) == Tag.version, 'version mismatch'
+                for attr in ['max_distance']:
+                    if eval(attr) is not None:
+                        self.Log('warning', self.master.ignore_warning_msg.format(attr=attr))
+                max_distance = params.get('max_distance')
+
+            prx_pts = np.vstack([
+                prx_data['verts1_prx'],
+                prx_data['verts2_prx'],
+            ])
+            within = []
+            for syn_xyz in syn_xyz_nm:
+                if np.any(np.linalg.norm(prx_pts - syn_xyz, axis=1) <= max_distance):
+                    within.append(True)
+                else:
+                    within.append(False)
+            return within
+        
+
+
+class ProximitySynapseComplete(mp.ProximitySynapseComplete):
+    pass
+
+
+class ProximitySynapseError(mp.ProximitySynapseError):
+    pass
+
+
+class ProximitySynapse(mp.ProximitySynapse):
+    @property
+    def key_source(self):
+        return ((Proximity2 & 'proximity_method="c04464"') - ProximitySynapseComplete - ProximitySynapseError) * ProximitySynapseMethod
+
+    def make(self, key):
+        try:
+            prx_rel = (Proximity2 & key)
+            prx_data = prx_rel.fetch1('data')
+            proximity_axon_rel = SkeletonProcessed.r1pwh(prx_rel.fetch1('skeleton_prc_id_axon')).proj(proximity_seg_id_axon='segment_id')
+            proximity_dend_rel = SkeletonProcessed.r1pwh(prx_rel.fetch1('skeleton_prc_id_dend')).proj(proximity_seg_id_dend='segment_id')
+            seg_343_axon_rel = m65mat.Nucleus.Info & {'ver': 343} & proximity_axon_rel
+            seg_343_dend_rel = m65mat.Nucleus.Info & {'ver': 343} & proximity_dend_rel
+            syn_343_rel = m65mat.Synapse.Info2 & {'ver': 343, 'primary_seg_id': seg_343_axon_rel.fetch1('segment_id'), 'secondary_seg_id': seg_343_dend_rel.fetch1('segment_id'), 'prepost': 'presyn'}
+            syn_df = pd.DataFrame(syn_343_rel.fetch(order_by='synapse_id'))
+            syn_xyz_nm = syn_df[['synapse_x', 'synapse_y', 'synapse_z']].values * np.array([4, 4, 40])
+            syn_include = (ProximitySynapseMethod.WithinDistance & key).run(prx_data, syn_xyz_nm)
+            syn_include_df = syn_df[syn_include]
+            syn_include_df['axon_len'] = prx_rel.fetch1('axon_len')
+            syn_include_df['dend_len'] = prx_rel.fetch1('dend_len')
+            syn_include_df['nucleus_id_axon'] = proximity_axon_rel.fetch1('nucleus_id')
+            syn_include_df['nucleus_id_dend'] = proximity_dend_rel.fetch1('nucleus_id')
+            for k, v in key.items():
+                syn_include_df[k] = v
+            self.insert(syn_include_df, ignore_extra_fields=True)
+            ProximitySynapseComplete.insert1(key, ignore_extra_fields=True, skip_duplicates=True)
+        except Exception as e:
+            key['traceback'] = traceback.format_exc()
+            ProximitySynapseError.insert1(key, ignore_extra_fields=True, skip_duplicates=True)
+
+
+class Proximity(mp.Proximity):
+    pass
