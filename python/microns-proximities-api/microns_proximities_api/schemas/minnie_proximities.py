@@ -456,11 +456,6 @@ class Proximity2(djp.Lookup):
         return fps
 
 
-class Proximity(Proximity2):
-    def __new__(cls):
-        return Proximity2()
-
-
 @schema
 class ProximityMaker(djp.Lookup):
     hash_name = 'prx_chunk_hash'
@@ -482,3 +477,55 @@ class ProximityMaker(djp.Lookup):
         total_time : float      # total time (seconds)
         ts_inserted=CURRENT_TIMESTAMP : timestamp
         """
+
+
+@schema
+class ProximitySynapseMethod(djp.Lookup):
+    hash_name = 'proximity_synapse_method'
+    definition = f"""
+    {hash_name} : varchar(8) # method for association proximities with synapses
+    """
+
+    class WithinDistance(djp.Part):
+        enable_hashing = True
+        hash_name = 'proximity_synapse_method'
+        hashed_attrs = 'max_distance', Tag.attr_name
+        definition = f"""
+        -> master
+        ---
+        max_distance : float # maximum distance (um) to any proximity point to assign a synapse to a proximity
+        -> Tag
+        """
+
+@schema
+class ProximitySynapseComplete(djp.Lookup):
+    definition = f"""
+    -> Proximity2
+    """
+
+@schema
+class ProximitySynapseError(djp.Lookup):
+    definition = f"""
+    -> Proximity2
+    ---
+    traceback : varchar(5000) # traceback
+    """
+
+@schema
+class ProximitySynapse(djp.Computed):
+    definition = """
+    -> ProximitySynapseMethod
+    -> Proximity2
+    nucleus_id_axon           : int unsigned                 # id of segmented nucleus.
+    nucleus_id_dend          : int unsigned                 # id of segmented nucleus.
+    -> m65mat.Synapse.Info2
+    ---
+    axon_len :                  float                                               # the skeletal length of the axon in the proximity
+    dend_len :                  float                                               # the skeletal length of the dendrite in the proximity
+    synapse_size         : int unsigned                 # (EM voxels) scaled by (4x4x40)
+    """
+
+
+class Proximity(Proximity2):
+    def __new__(cls):
+        return Proximity2()
