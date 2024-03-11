@@ -92,9 +92,9 @@ class AutoProofreadNeuron(djp.Lookup):
         -> master
         -> m65auto.AutoProofreadNeuron
         ---
+        multiplicity         : tinyint unsigned             # the total number of neurons that came from the parent segment id
         ts_inserted=CURRENT_TIMESTAMP : timestamp
         """
-
 
 @schema
 class ImportMethod(djp.Lookup):
@@ -381,7 +381,7 @@ class Proximity2(djp.Lookup):
         return cls.base_path.joinpath(f'{proximity_method}_{skeleton_prc_id_axon}_{skeleton_prc_id_dend}_{prx_id}_proximity').with_suffix(suffix)
     
     @classmethod
-    def restrict_with(cls, axon_source, dend_source, axon_key=None, dend_key=None, skeleton_prc_set='4c396d17', proximity_method='0ab4bc'):
+    def restrict_with(cls, axon_source, dend_source, proximity_method, skeleton_prc_set, axon_key=None, dend_key=None, auto_multiplicity=None):
         """
         Restrict the Proximity table with additional filtering criteria.
 
@@ -395,18 +395,23 @@ class Proximity2(djp.Lookup):
         dend_source : str
             Source of the dendrite data, similar to `axon_source`.
 
+        proximity_method : str
+            Proximity method hash.
+
+        skeleton_prc_set : str
+            Hash for the set of processed skeletons from `SkeletonProcessedSet.r1pwh()`. 
+
         axon_key : dict, optional
             Filtering relation for axon data. Defaults to an empty dictionary if None.
+            e.g. {'segment_id': 864691136108938168}
+                 {'nucleus_id': 553325}
 
         dend_key : dict, optional
             Filtering relation for dendrite data. Defaults to an empty dictionary if None.
+            same format as axon_key
 
-        skeleton_prc_set : str, optional
-            Hash for the skeleton processed set relation `SkeletonProcessedSet.r1pwh()`. 
-            Defaults to '4c396d17'.
-
-        proximity_method : str, optional
-            Proximity method hash. Defaults to '0ab4bc'.
+        auto_multiplicity : bool, optional
+            If not None, sets auto multiplicity. Defaults to None.
 
         Returns:
         -------
@@ -422,7 +427,10 @@ class Proximity2(djp.Lookup):
             if source == 'manual':
                 source_rel = SkeletonProcessed.MeshworkAxonDendrite
             elif source == 'auto':
-                source_rel = SkeletonProcessed.AutoProofreadNeuron
+                if auto_multiplicity is None:
+                    source_rel = SkeletonProcessed.AutoProofreadNeuron
+                else:
+                    source_rel = SkeletonProcessed.AutoProofreadNeuron & (AutoProofreadNeuron.V0 & {'multiplicity': auto_multiplicity}).proj()
             else:
                 raise AttributeError(f'source {source} not recognized')
             return source_rel        
@@ -479,6 +487,11 @@ class ProximityMaker(djp.Lookup):
         """
 
 
+class Proximity(Proximity2):
+    def __new__(cls):
+        return Proximity2()
+
+
 @schema
 class ProximitySynapseMethod(djp.Lookup):
     hash_name = 'proximity_synapse_method'
@@ -524,8 +537,167 @@ class ProximitySynapse(djp.Computed):
     dend_len :                  float                                               # the skeletal length of the dendrite in the proximity
     synapse_size         : int unsigned                 # (EM voxels) scaled by (4x4x40)
     """
+    
+    @classmethod
+    def restrict_with(cls, axon_source, dend_source, proximity_synapse_method, proximity_method, skeleton_prc_set, axon_key=None, dend_key=None, auto_multiplicity=None):
+        """
+        Restrict the Proximity table with additional filtering criteria.
+
+        Parameters:
+        ----------
+        axon_source : str
+            Source of the axon data, can be either 'manual' or 'auto'. If 'manual', it relates with
+            the `SkeletonProcessed.MeshworkAxonDendrite`, and if 'auto', it relates with 
+            `SkeletonProcessed.AutoProofreadNeuron`.
+
+        dend_source : str
+            Source of the dendrite data, similar to `axon_source`.
+
+        proximity_synapse_method : str
+            Proximity method hash. 
+
+        proximity_method : str
+            Proximity method hash. 
+
+        skeleton_prc_set : str
+            Hash for the set of processed skeletons from `SkeletonProcessedSet.r1pwh()`.
+
+        axon_key : dict, optional
+            Filtering relation for axon data. Defaults to an empty dictionary if None.
+
+        dend_key : dict, optional
+            Filtering relation for dendrite data. Defaults to an empty dictionary if None.
+        
+        auto_multiplicity : bool, optional
+            If not None, sets auto multiplicity. Defaults to None.
+
+        Returns:
+        -------
+        DataJoint relation
+            Restricted relation based on provided criteria and sources for axon and dendrite data.
+
+        Raises:
+        ------
+        AttributeError
+            If the axon or dendrite source is neither 'manual' nor 'auto'.
+        """
+        def resolve_source(source):
+            if source == 'manual':
+                source_rel = SkeletonProcessed.MeshworkAxonDendrite
+            elif source == 'auto':
+                if auto_multiplicity is None:
+                    source_rel = SkeletonProcessed.AutoProofreadNeuron
+                else:
+                    source_rel = SkeletonProcessed.AutoProofreadNeuron & (AutoProofreadNeuron.V0 & {'multiplicity': auto_multiplicity}).proj()
+            else:
+                raise AttributeError(f'source {source} not recognized')
+            return source_rel        
+        
+        axon_key = {} if axon_key is None else axon_key
+        dend_key = {} if dend_key is None else dend_key
+
+        axon_source_rel = resolve_source(axon_source)
+        dend_source_rel = resolve_source(dend_source)
+
+        sk_prc_set_rel = SkeletonProcessedSet.r1pwh(skeleton_prc_set)
+        axon_source_rel = axon_source_rel * sk_prc_set_rel
+        dend_source_rel = dend_source_rel * sk_prc_set_rel
+
+        axon_rel = (axon_source_rel & axon_key).proj(**{a + '_' + 'axon': a for a in axon_source_rel.primary_key})
+        dend_rel = (dend_source_rel & dend_key).proj(**{a + '_' + 'dend': a for a in dend_source_rel.primary_key})
+
+        prx_syn_rel = cls & {'proximity_synapse_method': proximity_synapse_method, 'proximity_method': proximity_method}
+
+        return prx_syn_rel * axon_rel * dend_rel
 
 
-class Proximity(Proximity2):
-    def __new__(cls):
-        return Proximity2()
+
+@schema
+class ProximitySet(djp.Lookup):
+    hash_name = 'prx_set_id'
+    definition = """
+    prx_set_id : varchar(8)   # id of proximity set
+    """
+    
+    class Info(djp.Part):
+        enable_hashing = True
+        hash_name = 'prx_set_id'
+        hashed_attrs = 'proximity_method', 'skeleton_prc_set', 'remove_auto_multisoma', Tag.attr_name
+        definition = f"""
+        -> master
+        proximity_method         : varchar(6)                   #
+        skeleton_prc_set         : varchar(8)                   #
+        remove_auto_multisoma    : tinyint                      # 
+        -> Tag
+        ---
+        ts_inserted=CURRENT_TIMESTAMP : timestamp
+        """
+
+    class Store(djp.Part):
+        hash_name = 'prx_set_id'
+        definition = """
+        -> master
+        skeleton_source_axon          : varchar(12)                  # axon source (manual or auto)
+        skeleton_source_dend          : varchar(12)                  # dendrite source (manual or auto)
+        skeleton_prc_id_axon          : varchar(16)                  # processed skeleton hash
+        skeleton_prc_id_dend          : varchar(16)                  # processed skeleton hash
+        prx_id                        : varchar(16)                  # id of proximity
+        ---
+        segment_id_axon               : bigint unsigned              # id of the segment under the nucleus centroid. Equivalent to Allen 'pt_root_id'.
+        segment_id_dend               : bigint unsigned              # id of the segment under the nucleus centroid. Equivalent to Allen 'pt_root_id'.
+        split_index_axon=NULL         : tinyint                      # split_index, if from autoproofreading, -1 if not applicable
+        split_index_dend=NULL         : tinyint                      # split_index, if from autoproofreading, -1 if not applicable
+        nucleus_id_axon               : int unsigned                 # id of segmented nucleus.
+        nucleus_id_dend               : int unsigned                 # id of segmented nucleus.
+        axon_len                      : float                        # the skeletal length of the axon in the proximity
+        dend_len                      : float                        # the skeletal length of the dendrite in the proximity
+        """
+
+
+@schema
+class ProximitySynapseSet(djp.Lookup):
+    hash_name = 'prx_syn_set_id'
+    definition = """
+    prx_syn_set_id : varchar(8)   # id of proximity synapse set
+    """
+    
+    class Info(djp.Part):
+        enable_hashing = True
+        hash_name = 'prx_syn_set_id'
+        hashed_attrs = 'proximity_synapse_method', 'proximity_method', 'skeleton_prc_set', 'remove_auto_multisoma', 'remove_multisoma_from_syn_table', Tag.attr_name
+        definition = f"""
+        -> master
+        proximity_synapse_method : varchar(8)               #
+        proximity_method         : varchar(6)                   #
+        skeleton_prc_set         : varchar(8)                   #
+        remove_auto_multisoma    : tinyint                      #
+        remove_multisoma_from_syn_table : tinyint
+        -> Tag
+        ---
+        ts_inserted=CURRENT_TIMESTAMP : timestamp
+        """
+            
+    class Store(djp.Part):
+        hash_name = 'prx_syn_set_id'
+        definition = """
+        -> master
+        skeleton_source_axon          : varchar(12)                  # axon source (manual or auto)
+        skeleton_source_dend          : varchar(12)                  # dendrite source (manual or auto)
+        skeleton_prc_id_axon          : varchar(16)                  # processed skeleton hash
+        skeleton_prc_id_dend          : varchar(16)                  # processed skeleton hash
+        prx_id                        : varchar(16)                  # id of proximity
+        synapse_id                    : bigint unsigned              # synapse index within the segmentation
+        ---
+        segment_id_axon               : bigint unsigned              # id of the segment for the axon skeleton
+        segment_id_dend               : bigint unsigned              # id of the segment for the dendrite skeleton
+        split_index_axon              : tinyint                      # split_index, if from autoproofreading, -1 if not applicable
+        split_index_dend              : tinyint                      # split_index, if from autoproofreading, -1 if not applicable
+        ver                           : decimal(6,2)                 # materialization version for synapse table
+        primary_seg_id                : bigint unsigned              # id of the segment from the synapse table
+        secondary_seg_id              : bigint unsigned              # id of the segment from the synapse table that is synaptically paired to primary_segment_id.
+        nucleus_id_axon               : int unsigned                 # id of segmented nucleus.
+        nucleus_id_dend               : int unsigned                 # id of segmented nucleus.
+        axon_len                      : float                        # the skeletal length of the axon in the proximity
+        dend_len                      : float                        # the skeletal length of the dendrite in the proximity
+        synapse_size                  : int unsigned                 # (EM voxels) scaled by (4x4x40)
+        """
