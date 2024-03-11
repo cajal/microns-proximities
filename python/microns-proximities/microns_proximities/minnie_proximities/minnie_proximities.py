@@ -729,6 +729,9 @@ class ProximityMaker(mp.ProximityMaker):
             logger.info('Insert completed.')
 
 
+class Proximity(mp.Proximity):
+    pass
+
 class ProximitySynapseMethod(mp.ProximitySynapseMethod):
     @classmethod
     def run(cls, key):
@@ -805,5 +808,92 @@ class ProximitySynapse(mp.ProximitySynapse):
             ProximitySynapseError.insert1(key, ignore_extra_fields=True, skip_duplicates=True)
 
 
-class Proximity(mp.Proximity):
-    pass
+
+class ProximitySet(mp.ProximitySet):
+  
+    class Info(mp.ProximitySet.Info):
+
+        @classmethod
+        def fill(cls, proximity_method, skeleton_prc_set, remove_auto_multisoma):
+            prx_kws = dict(
+                proximity_method=proximity_method, 
+                skeleton_prc_set=skeleton_prc_set,
+                auto_multiplicity=1 if remove_auto_multisoma else None
+            )
+            hashed_attrs = {'proximity_method': proximity_method, 'skeleton_prc_set': skeleton_prc_set, 'remove_auto_multisoma': int(remove_auto_multisoma), Tag.attr_name: Tag.version}
+            prx_set_id = cls.hash1(hashed_attrs)
+            attrs = ['prx_set_id', 'skeleton_source_axon', 'skeleton_source_dend', 'skeleton_prc_id_axon', 'skeleton_prc_id_dend', 'prx_id', 'segment_id_axon', 'nucleus_id_axon', 'segment_id_dend', 'nucleus_id_dend', 'split_index_axon', 'split_index_dend', 'axon_len', 'dend_len']
+            mm = dj.U(*attrs) & (Proximity2.restrict_with('manual', 'manual', **prx_kws).proj(..., prx_set_id=f"'{prx_set_id}'", skeleton_source_axon="'manual'", skeleton_source_dend="'manual'", split_index_axon="'-1'", split_index_dend="'-1'"))
+            am = dj.U(*attrs) & (Proximity2.restrict_with('auto', 'manual', **prx_kws).proj(..., prx_set_id=f"'{prx_set_id}'", skeleton_source_axon="'auto'", skeleton_source_dend="'manual'", split_index_dend="'-1'"))
+            ma = dj.U(*attrs) & (Proximity2.restrict_with('manual', 'auto', **prx_kws).proj(..., prx_set_id=f"'{prx_set_id}'", skeleton_source_axon="'manual'", skeleton_source_dend="'auto'", split_index_axon="'-1'"))
+            aa = dj.U(*attrs) & (Proximity2.restrict_with('auto', 'auto', **prx_kws).proj(..., prx_set_id=f"'{prx_set_id}'", skeleton_source_axon="'auto'", skeleton_source_dend="'auto'"))
+
+            with dj.conn().transaction:
+                cls.master.Store.insert(mm + am + ma + aa, insert_to_master=True)
+                cls.insert1({'prx_set_id': prx_set_id, **hashed_attrs}, skip_hashing=True)
+            
+    class Store(mp.ProximitySet.Store):
+        pass
+
+
+class ProximitySynapseSet(mp.ProximitySynapseSet):
+
+    class Info(mp.ProximitySynapseSet.Info):
+
+        @classmethod
+        def fill(cls, proximity_synapse_method, proximity_method, skeleton_prc_set, remove_auto_multisoma, remove_multisoma_from_syn_table):
+            prx_syn_kws = dict(
+                proximity_synapse_method=proximity_synapse_method,
+                proximity_method=proximity_method, 
+                skeleton_prc_set=skeleton_prc_set,
+                auto_multiplicity=1 if remove_auto_multisoma else None
+            )
+            hashed_attrs = {
+                'proximity_synapse_method': proximity_synapse_method,
+                'proximity_method': proximity_method, 
+                'skeleton_prc_set': skeleton_prc_set, 
+                'remove_auto_multisoma': int(remove_auto_multisoma),
+                'remove_multisoma_from_syn_table': int(remove_multisoma_from_syn_table),
+                Tag.attr_name: Tag.version
+            }
+            prx_syn_set_id = cls.hash1(hashed_attrs)
+            attrs = [
+                'prx_syn_set_id', 
+                'skeleton_source_axon', 
+                'skeleton_source_dend', 
+                'skeleton_prc_id_axon', 
+                'skeleton_prc_id_dend', 
+                'prx_id', 
+                'synapse_id', 
+                'segment_id_axon', 
+                'segment_id_dend',
+                'split_index_axon', 
+                'split_index_dend',
+                'ver',
+                'primary_seg_id', 
+                'secondary_seg_id', 
+                'nucleus_id_axon',  
+                'nucleus_id_dend', 
+                'axon_len', 
+                'dend_len', 
+                'synapse_size'
+            ]
+            mm = dj.U(*attrs) & (ProximitySynapse.restrict_with('manual', 'manual', **prx_syn_kws).proj(..., prx_syn_set_id=f"'{prx_syn_set_id}'", skeleton_source_axon="'manual'", skeleton_source_dend="'manual'", split_index_axon="'-1'", split_index_dend="'-1'"))
+            am = dj.U(*attrs) & (ProximitySynapse.restrict_with('auto', 'manual', **prx_syn_kws).proj(..., prx_syn_set_id=f"'{prx_syn_set_id}'", skeleton_source_axon="'auto'", skeleton_source_dend="'manual'", split_index_dend="'-1'"))
+            ma = dj.U(*attrs) & (ProximitySynapse.restrict_with('manual', 'auto', **prx_syn_kws).proj(..., prx_syn_set_id=f"'{prx_syn_set_id}'", skeleton_source_axon="'manual'", skeleton_source_dend="'auto'", split_index_axon="'-1'"))
+            aa = dj.U(*attrs) & (ProximitySynapse.restrict_with('auto', 'auto', **prx_syn_kws).proj(..., prx_syn_set_id=f"'{prx_syn_set_id}'", skeleton_source_axon="'auto'", skeleton_source_dend="'auto'"))
+
+            if remove_multisoma_from_syn_table:
+                ss_segs = (dj.U('segment_id').aggr(m65mat.Nucleus.Info & {'ver': 343}, n_nuc='count(nucleus_id)') & 'n_nuc=1')
+                pri_ss_segs = ss_segs.proj(primary_seg_id='segment_id')
+                sec_ss_segs = ss_segs.proj(secondary_seg_id='segment_id')
+                for rel in [mm, am, ma, aa]:
+                    rel &= pri_ss_segs
+                    rel &= sec_ss_segs
+                
+            with dj.conn().transaction:
+                cls.master.Store.insert(mm + am + ma + aa, insert_to_master=True)
+                cls.insert1({'prx_syn_set_id': prx_syn_set_id, **hashed_attrs}, skip_hashing=True)
+            
+    class Store(mp.ProximitySynapseSet.Store):
+        pass
