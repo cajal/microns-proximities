@@ -7,7 +7,7 @@ LABEL mantainer="Stelios Papadopoulos <spapadop@bcm.edu>"
 # Update and rebuild jupyterlab 
 RUN python -m pip install --no-cache-dir --upgrade jupyterlab
 
-WORKDIR /root
+WORKDIR /
 ARG CLOUDVOLUME_TOKEN
 RUN mkdir -p .cloudvolume/secrets
 RUN echo "{\"token\": \"${CLOUDVOLUME_TOKEN:-}\"}" > .cloudvolume/secrets/cave-secret.json
