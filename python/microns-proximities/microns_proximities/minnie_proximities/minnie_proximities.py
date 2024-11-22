@@ -804,6 +804,7 @@ class ProximitySynapse(mp.ProximitySynapse):
             self.insert(syn_include_df, ignore_extra_fields=True)
             ProximitySynapseComplete.insert1(key, ignore_extra_fields=True, skip_duplicates=True)
         except Exception as e:
+            self.Log('error', f'Error in ProximitySynapse.make(): {e}')
             key['traceback'] = traceback.format_exc()
             ProximitySynapseError.insert1(key, ignore_extra_fields=True, skip_duplicates=True)
 
